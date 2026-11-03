@@ -1,0 +1,3 @@
+model,device,threads,batch,mean_ms,images_per_sec
+resnet18_real,cpu,2,1,13.73,72.8
+resnet18_synthetic,cpu,2,1,13.13,76.2

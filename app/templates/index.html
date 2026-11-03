@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Handwritten Digits and Symbols</title>
+<style>
+body { font-family: Arial, sans-serif; max-width: 900px; margin: 20px auto; padding: 0 16px; color: #222; background: #fff; }
+h1 { font-size: 22px; }
+h2 { font-size: 18px; margin-top: 28px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+.row { display: flex; gap: 24px; flex-wrap: wrap; }
+.box { border: 1px solid #ccc; padding: 12px; }
+canvas { border: 1px solid #888; touch-action: none; cursor: crosshair; }
+button, select { padding: 6px 12px; margin: 4px 4px 4px 0; }
+table { border-collapse: collapse; }
+td, th { border: 1px solid #ccc; padding: 4px 8px; text-align: left; }
+.result img { width: 160px; height: 160px; image-rendering: pixelated; border: 1px solid #ccc; }
+.gallery-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; margin-bottom: 12px; }
+.tile { text-align: center; font-size: 11px; }
+.tile img { width: 80px; height: 80px; object-fit: contain; border: 1px solid #ccc; display: block; }
+.synthetic img { border: 2px dashed #c00; }
+.tag { color: #c00; font-weight: bold; }
+.note { font-size: 13px; color: #555; }
+</style>
+</head>
+<body>
+<h1>Handwritten Digits and Math Symbols Classifier</h1>
+<p class="note">Classes: {{ classes | join("  ") }}. Uploaded and drawn images are processed in memory and are not saved.</p>
+
+<h2>1. Input</h2>
+<div class="row">
+  <div class="box">
+    <b>Draw</b><br>
+    <canvas id="pad" width="280" height="280"></canvas><br>
+    <button id="clear">Clear</button>
+    <button id="predict-draw">Predict drawing</button>
+  </div>
+  <div class="box">
+    <b>Upload image</b><br>
+    <input type="file" id="file" accept="image/*"><br>
+    <button id="predict-file">Predict upload</button>
+    <p><b>Model</b><br>
+    <select id="model">
+      {% for key, name in models %}<option value="{{ key }}">{{ name }}</option>{% endfor %}
+    </select></p>
+  </div>
+</div>
+
+<h2>2. Prediction and explanation</h2>
+<div id="result" class="result"><p class="note">No prediction yet.</p></div>
+
+<h2>3. Environment</h2>
+<table>
+  <tr><th>Server device</th><td>{{ env.device }} ({{ env.threads }} threads)</td></tr>
+  <tr><th>Server OS</th><td>{{ env.os }}</td></tr>
+  <tr><th>Python / PyTorch</th><td>{{ env.python }} / {{ env.torch }}</td></tr>
+  <tr><th>Browser</th><td id="browser"></td></tr>
+</table>
+
+{% if has_gallery %}
+<h2>4. Synthetic examples <span class="tag">SYNTHETIC</span></h2>
+<p class="note">Images with a red dashed border are <b>synthetic</b>. They were generated offline (Google Colab) by
+TA-TiTok + MaskGen from real training images and are used only as extra training data.
+"kept" means the image passed the label filter.</p>
+<select id="gallery-class">{% for c in classes %}<option>{{ c }}</option>{% endfor %}</select>
+<div id="gallery"></div>
+{% endif %}
+
+<script>
+document.getElementById("browser").textContent = navigator.userAgent;
+const pad = document.getElementById("pad");
+const ctx = pad.getContext("2d");
+function clearPad() { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, pad.width, pad.height); }
+clearPad();
+ctx.lineWidth = 12; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#1a2a8a";
+let drawing = false;
+function pos(e) { const r = pad.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+pad.addEventListener("pointerdown", e => { drawing = true; ctx.beginPath(); ctx.moveTo(...pos(e)); });
+pad.addEventListener("pointermove", e => { if (drawing) { ctx.lineTo(...pos(e)); ctx.stroke(); } });
+window.addEventListener("pointerup", () => drawing = false);
+document.getElementById("clear").onclick = clearPad;
+
+async function send(blob, drawn) {
+  const form = new FormData();
+  form.append("image", blob, "input.png");
+  form.append("drawn", drawn ? "1" : "0");
+  form.append("model", document.getElementById("model").value);
+  const out = document.getElementById("result");
+  out.innerHTML = "<p>Running...</p>";
+  const res = await fetch("/predict", { method: "POST", body: form });
+  if (!res.ok) { out.innerHTML = "<p>Error: " + res.status + "</p>"; return; }
+  const d = await res.json();
+  const rows = d.top.map(t => `<tr><td>${t.label}</td><td>${(t.prob * 100).toFixed(1)}%</td></tr>`).join("");
+  out.innerHTML = `
+    <p><b>Prediction: ${d.label}</b> &nbsp; (${d.model})</p>
+    <div class="row">
+      <div><img src="${d.input}"><br>Input</div>
+      <div><img src="${d.gradcam}"><br>Grad-CAM</div>
+      <div><table><tr><th>Top-3</th><th>Probability</th></tr>${rows}</table></div>
+    </div>
+    <p>Inference time: ${d.latency_ms} ms (mean of 10 runs). Average over ${d.requests} requests: ${d.avg_latency_ms} ms.</p>`;
+}
+document.getElementById("predict-draw").onclick = () => pad.toBlob(b => send(b, true));
+document.getElementById("predict-file").onclick = () => {
+  const f = document.getElementById("file").files[0];
+  if (f) send(f, false);
+};
+
+const gc = document.getElementById("gallery-class");
+async function loadGallery() {
+  const res = await fetch("/gallery/" + encodeURIComponent(gc.value));
+  const data = await res.json();
+  document.getElementById("gallery").innerHTML = data.map(g => `
+    <div class="gallery-row">
+      <div class="tile"><img src="${g.source}">real</div>
+      ${g.variants.map(v => `<div class="tile synthetic"><img src="${v.url}"><span class="tag">SYNTHETIC</span><br>${v.style}<br>${v.keep === "1" ? "kept" : (v.keep === "0" ? "rejected" : "")}</div>`).join("")}
+    </div>`).join("");
+}
+if (gc) { gc.onchange = loadGallery; loadGallery(); }
+</script>
+</body>
+</html>

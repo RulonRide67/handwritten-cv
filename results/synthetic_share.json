@@ -1,0 +1,7 @@
+{
+ "real_train": 468,
+ "synthetic_generated": 2808,
+ "synthetic_kept": 1176,
+ "synthetic_share_of_train_pool": 0.715,
+ "synthetic_share_per_epoch": 0.5
+}
